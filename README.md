@@ -1,11 +1,16 @@
 
 # Interference Cancellation Techniques using GNU Radio
 
-## Detection
-- Includes various detection techniques 
 
-## Estimation
-- Compares ML to classical estimation approaches
+## Sine Wave
+
+  Detection and Estimation of a pure tone of unknown amplitude and frequency. 
+    
+  ## Detection
+  - Includes various detection techniques 
+  
+  ## Estimation
+  - Compares ML to classical estimation approaches
 
 ## gr-detection-estimation
 - GNU Radio OOT Module [work in progress]
