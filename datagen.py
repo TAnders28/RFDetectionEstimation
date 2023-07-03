@@ -4,8 +4,6 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import scipy as scy
 import komm
-
-
 from tokenize import Number
 from numpy import pi
 from numpy import sin
@@ -33,51 +31,21 @@ def butterLowpassFilter(data, cutoff, fs, filt_order=5):
     y = lfilter(b, a, data)
     return y
 
+def normalize(Signal):
+    return Signal / np.max(np.abs(Signal))
 
+def scaleToDesiredPower(Signal, DesiredPower):
+    InitialPower = np.linalg.norm(Signal) ** 2
 
-commonThresh = 420
-def matchedFilterIridium(SNR, NumberofRecordings):
-    DataSet = genIridiumFile(SNR, NumberOfRecordings=NumberofRecordings, Ns = 42000)
-    matchedFilter = genMatchedFilter()
-    # print(matchedFilter.shape)
-    ComplexMF = matchedFilter[0,:] + 1j * matchedFilter[0,:]
-    threshold = commonThresh
-    detections = 0
-    for signal in DataSet:
-        Complex = signal[:,0] + 1j * signal[:,1]
-        Filtered = np.convolve(ComplexMF, Complex)
-        absoluteValFiltered= np.abs(Filtered)
-        # plt.plot(absoluteValFiltered)
-        if any(absoluteValFiltered > threshold):
-            detections = detections + 1
-            
-def matchedFilterNoise(NumberofRecordings):
-    DataSet = genNoiseFile(NumberOfRecordings=NumberofRecordings, Ns = 42000)
-    matchedFilter = genMatchedFilter()
-    # print(matchedFilter.shape)
-    ComplexMF = matchedFilter[0,:] + 1j * matchedFilter[0,:]
-    threshold = commonThresh
-    detections = 0
-    for signal in DataSet:
-        Complex = signal[:,0] + 1j * signal[:,1]
-        Filtered = np.convolve(ComplexMF, Complex)
-        absoluteValFiltered= np.abs(Filtered)
-        # plt.plot(absoluteValFiltered)
-        if any(absoluteValFiltered > threshold):
-            detections = detections + 1
+    scalingFactor = np.sqrt(DesiredPower / InitialPower)
 
-
-    
-    # plt.show()
-
-    return (detections / NumberofRecordings)
-
-
+    Signal = Signal * scalingFactor
+    return Signal
 
 ##############################
 ##############################
 # Base waveforms
-def genSineWave(fc, fs, Ns, plotDebug=False):
+def genSineWave(fc, fs, Ns, A = 1 +  0j, plotDebug=False):
     """
     Generates a sine wave with the specified parameters:
     carrier frequency fc, 
@@ -90,14 +58,12 @@ def genSineWave(fc, fs, Ns, plotDebug=False):
     offset = rm.randint(0,1000)
     t = r_[0.0+offset:Ns+offset]/fs            # time points
     
-    carrier = cos(2*pi*fc*t) 
-
-    SineWave = carrier
+    SineWave = A * sin(2*pi*fc*t) 
 
     if plotDebug:
-        plt.plot(carrier)
+        plt.plot(SineWave)
         plt.show()
-
+    
 
     return SineWave
 
@@ -119,10 +85,9 @@ def genBPSK(fc, fs, Ns, SymbolRate, printDebug=False, plotDebug=False):
     
     offset = rm.randint(0,1000)
     t = r_[0.0+offset:Ns+offset]/fs            # time points
-    inputBits = np.random.randn(NbitsBPSK,1) > 0 
+    inputBits = np.asarray(np.random.randn(NbitsBPSK,1) > 0) 
     carrier = cos(2*pi*fc*t)
 
-    I_bits= np.asarray(inputBits)
     if printDebug:
         print(I_bits)
 
@@ -130,10 +95,9 @@ def genBPSK(fc, fs, Ns, SymbolRate, printDebug=False, plotDebug=False):
 
     I_signal = []
     I_index =  0
+    I_bits = inputBits *2 - 1    
     NextSymbolTime = NsSymbol
 
-    I_bits = I_bits *2 - 1
-    
     while start < Ns:
         I_signal.append(I_bits[I_index])
         start = start + 1
@@ -255,7 +219,7 @@ def genQPSK(fc, fs, Ns, SymbolRate, printDebug=False, plotDebug=False):
         plt.plot(symbol_array)
         plt.show()
     
-        o = 0
+    o = 0
     for i in symbol_array:
         # print(o)
         # print(rrc.impulse_response(i))
@@ -293,11 +257,28 @@ def genQPSK(fc, fs, Ns, SymbolRate, printDebug=False, plotDebug=False):
         plt.show()
     return QPSK_signal
 
+def genScaledNoise(Signal, SNR):
+    
+    SNRLin = pow(10, SNR/10)
+
+    SigPower = np.linalg.norm(Signal)**2 
+    
+    NoisePowerDesired = SigPower / SNRLin
+
+    Noise = np.random.normal(0, 1, len(Signal))
+     
+    Noise = scaleToDesiredPower(Noise,NoisePowerDesired)
+
+    return Noise
+
+def genConstantNoise(Ns = 500):
+    awgn = np.random.normal(0, 1, Ns)
+
+    return awgn
 
 ##############################
 ##############################
 # Noise added to base waveforms
-
 
 def genSineWaveNoise(SNR, fc=75000, fs=2048000, Ns=500, plotDebug=False):    
     """
@@ -311,17 +292,14 @@ def genSineWaveNoise(SNR, fc=75000, fs=2048000, Ns=500, plotDebug=False):
     """
 
     SineWave = genSineWave(fc,fs,Ns)
-    SNRRandRange = SNR - 0.5 + rm.random()
-    SNRLin = pow(10, SNRRandRange/10)
-    SineWave = SineWave * SNRLin
-    SigPower = np.linalg.norm(SineWave)**2 / SineWave.size
-    awgn = komm.AWGNChannel(SNRLin, SigPower)
-    SineWave_Noise = awgn(SineWave)
-    SineWave_NoiseNormal = SineWave_Noise/max(abs(SineWave_Noise))
+    Noise = genScaledNoise(SineWave, SNR)
+
+    SineWaveNoise = SineWave + Noise
+    print("SNR True", 10 * np.log10(np.linalg.norm(SineWave) ** 2/np.linalg.norm(Noise) ** 2) )
     if plotDebug:
-        plt.plot(SineWave_NoiseNormal)
+        plt.plot(SineWaveNoise)
         plt.show()
-    return SineWave_NoiseNormal
+    return SineWaveNoise
 
 def genSineWaveNoiseUnscaled(SNR, fc=75000, fs=2048000, Ns=500, plotDebug=False):
     """
@@ -334,20 +312,29 @@ def genSineWaveNoiseUnscaled(SNR, fc=75000, fs=2048000, Ns=500, plotDebug=False)
     Optional debug flag plotDebug
     """
 
+
+    
+
     SineWave = genSineWave(fc,fs,Ns)
-    SNRRandRange = SNR - 0.5 + rm.random()
-    SNRLin = pow(10, SNRRandRange/10)
+    Noise = genConstantNoise()
+    
+    NoisePower = np.linalg.norm(Noise) ** 2
+    SNRLin = pow(10, SNR/10)
+    SignalPowerDesired = SNRLin * NoisePower
 
-    SigPower = SNRLin
-    SineWave = SineWave * SNRLin
-    awgn = komm.AWGNChannel(SNRLin, SigPower) 
-    SineWave_Noise = awgn(SineWave) 
+    SineWave = scaleToDesiredPower(SineWave, SignalPowerDesired)
+
+
+    SineWaveNoise = SineWave + Noise
+
+    
+    print("SNR True", 10 * np.log10(np.linalg.norm(SineWave) ** 2/np.linalg.norm(Noise) ** 2) )
     if plotDebug:
-        plt.plot(SineWave_Noise)
+        plt.plot(SineWaveNoise)
         plt.show()
-    return SineWave_Noise
+    return SineWaveNoise
 
-def genBPSKNoise(SNR, fc, fs, Ns, SymbolRate, printDebug=False, plotDebug=False):
+def genBPSKNoise(SNR, fc=75000, fs=2048000, Ns=500,SymbolRate=25000, printDebug=False, plotDebug=False):
     """
     Generates a noisy BSPK wave with the specified parameters:
     Signal-Noise Ratio SNR,
@@ -360,32 +347,20 @@ def genBPSKNoise(SNR, fc, fs, Ns, SymbolRate, printDebug=False, plotDebug=False)
     """
     BPSK = genBPSK(fc,fs,Ns,SymbolRate)
     
-    SNRRandRange = SNR - 0.5 + rm.random()
-    SNRLin = pow(10, SNRRandRange/10)
-    
-    BPSK = BPSK * SNRLin
-    SigPower = np.linalg.norm(BPSK)**2 / BPSK.size
-    awgn = komm.AWGNChannel(SNRLin, SigPower)
-    BPSK_Noise = awgn(BPSK)
+    Noise = genScaledNoise(BPSK, SNR)
 
-    BPSK_NoiseNormal = BPSK_Noise/max(abs(BPSK_Noise))
+    BPSKNoise = BPSK + Noise
+    print("SNR True", 10 * np.log10(np.linalg.norm(BPSK) ** 2/np.linalg.norm(Noise) ** 2) )
 
-    
     if plotDebug:
         plt.plot(BPSK)
-        plt.plot(BPSK_Noise)
+        plt.plot(BPSKNoise)
         plt.show()
     
     
-    return BPSK_NoiseNormal
+    return BPSKNoise
 
-
-##############################
-##############################
-# Noise added to base waveforms -- unscaled
-
-
-def genBPSKNoiseUnscaled(SNR, fc=75000, fs=2048000, Ns=500, plotDebug=False):
+def genBPSKNoiseUnscaled(SNR, fc=75000, fs=2048000, Ns=500, SymbolRate=25000, plotDebug=False):
 
     
     """
@@ -398,20 +373,26 @@ def genBPSKNoiseUnscaled(SNR, fc=75000, fs=2048000, Ns=500, plotDebug=False):
     Optional debug flag plotDebug
     """
 
-    BPSK = genBPSK(fc,fs,Ns,25000)
-    SNRRandRange = SNR - 0.5 + rm.random()
-    SNRLin = pow(10, SNRRandRange/10)
+    BPSK = genBPSK(fc,fs,Ns,SymbolRate)
+    Noise = genConstantNoise()
+    
+    NoisePower = np.linalg.norm(Noise) ** 2
+    SNRLin = pow(10, SNR/10)
+    SignalPowerDesired = SNRLin * NoisePower
 
-    SigPower = SNRLin
-    BPSK = BPSK * SNRLin
-    awgn = komm.AWGNChannel(SNRLin, SigPower) 
-    BPSK_Noise = awgn(BPSK) 
+    BPSK = scaleToDesiredPower(BPSK, SignalPowerDesired)
+
+
+    BPSKNoise = BPSK + Noise
+
+    
+    print("SNR True", 10 * np.log10(np.linalg.norm(BPSK) ** 2/np.linalg.norm(Noise) ** 2) )
     if plotDebug:
-        plt.plot(BPSK_Noise)
+        plt.plot(BPSKNoise)
         plt.show()
-    return BPSK_Noise
+    return BPSKNoise
 
-def genQPSKNoise(SNR, fc, fs, Ns, SymbolRate, printDebug=False, plotDebug=False):
+def genQPSKNoise(SNR, fc=75000, fs=2048000, Ns=500, SymbolRate = 25000, printDebug=False, plotDebug=False):
     """
     Generates a noisy QSPK wave with the specified parameters:
     Signal-Noise Ratio SNR,
@@ -424,26 +405,23 @@ def genQPSKNoise(SNR, fc, fs, Ns, SymbolRate, printDebug=False, plotDebug=False)
     """
     
     QPSK = genQPSK(fc, fs, Ns, SymbolRate)
-    SNRRandRange = SNR - 0.5 + rm.random()
-    SNRLin = pow(10, SNRRandRange/10)
-    QPSK = QPSK *SNRLin
-    SigPower = np.linalg.norm(QPSK)**2 / QPSK.size
-    awgn = komm.AWGNChannel(SNRLin, SigPower)
-    QPSK_Noise = awgn(QPSK)
+    
+    Noise = genScaledNoise(QPSK, SNR)
 
-    QPSK_NoiseNormal = QPSK_Noise/max(abs(QPSK_Noise))
+    QPSKNoise = QPSK + Noise
+    print("SNR True", 10 * np.log10(np.linalg.norm(QPSK) ** 2/np.linalg.norm(Noise) ** 2) )
 
     
     if plotDebug:
         # plt.plot(QPSK)
         # plt.plot(QPSK_NoiseNormal)
         plt.plot(QPSK)
-        plt.plot(QPSK_Noise)
+        plt.plot(QPSKNoise)
         plt.show()
     
-    return QPSK_NoiseNormal
+    return QPSKNoise
 
-def genQPSKNoiseUnscaled(SNR, fc=75000, fs=2048000, Ns=500, plotDebug=False):
+def genQPSKNoiseUnscaled(SNR, fc=75000, fs=2048000, Ns=500, SymbolRate = 25000, plotDebug=False):
 
     
     """
@@ -457,52 +435,26 @@ def genQPSKNoiseUnscaled(SNR, fc=75000, fs=2048000, Ns=500, plotDebug=False):
     """
 
     QPSK = genQPSK(fc,fs,Ns,25000)
-    SNRRandRange = SNR - 0.5 + rm.random()
-    SNRLin = pow(10, SNRRandRange/10)
-
-    SigPower = SNRLin
-    QPSK = QPSK *SNRLin
-    awgn = komm.AWGNChannel(SNRLin, SigPower) 
-    QPSK_Noise = awgn(QPSK) 
-    if plotDebug:
-        plt.plot(QPSK_Noise)
-        plt.show()
-    return QPSK_Noise
-
-
-def genNoise(Ns=500, plotDebug=False):
-    """
-    Generates samples of AWGN normalized to be between -1 and 1
-    """
-    result = np.random.normal(size=(Ns))
-    result = result / max(abs(result))
-    if plotDebug:
-      plt.plot(result)
-      plt.show()
-    return result
-
-def genNoiseUnscaled(Ns=500, plotDebug=False, complexSamples = False):
-    """
-    Generates samples of AWGN
-    """
-    if complexSamples:
-        result = (np.random.normal(size=(Ns)) + 1j * np.random.normal(size=(Ns)) ) * np.sqrt(1/2) 
-    else:
-        result = np.random.normal(size=(Ns)) 
+    Noise = genConstantNoise()
     
-    result = result 
+    NoisePower = np.linalg.norm(Noise) ** 2
+    SNRLin = pow(10, SNR/10)
+    SignalPowerDesired = SNRLin * NoisePower
+
+    QPSK = scaleToDesiredPower(QPSK, SignalPowerDesired)
+
+    print("SNR True", 10 * np.log10(np.linalg.norm(QPSK) ** 2/np.linalg.norm(Noise) ** 2) )
+    QPSKNoise = QPSK + Noise
     if plotDebug:
-      plt.plot(result)
-      plt.show()
-    return result
+        plt.plot(QPSKNoise)
+        plt.show()
+    return QPSKNoise
 
 
 ##############################
 ##############################
 # IQ Channelization
-
-
-def convertToIQ(SignalRecieved, fReciever=75000, fs=2048000, plotDebug=False):
+def convertToIQ(SignalRecieved, fReciever=75000, fs=2048000,bandwidth = 40000, plotDebug=False):
     """
     Converts 1 channel of raw input into 2 channels 
     representing the In-Phase and Quadrature components 
@@ -520,7 +472,7 @@ def convertToIQ(SignalRecieved, fReciever=75000, fs=2048000, plotDebug=False):
     phase_shift = 2*pi * rm.random()
     FinalSignal_I = SignalRecieved * cos(2*pi*fReciever*t + phase_shift)
     FinalSignal_Q = SignalRecieved * sin(2*pi*fReciever*t + phase_shift)
-    bandwidth = 40000
+    
 
     
     if plotDebug:
@@ -548,48 +500,147 @@ def convertToIQ(SignalRecieved, fReciever=75000, fs=2048000, plotDebug=False):
 
 ##############################
 ##############################
+# Sine data test file generation
+def genSineFile(SNR, fc=75000, fs=2048000, NumberOfRecordings=100, Ns=500):
+    """
+    Generates a fully formatted matrix of shape(NumberOfRecordings, Ns, 2), 
+    containing NumberOfRecordings of length NS of a noisy sine wave with 
+    the specified parameters.
+    """
+    
+    result = []
+
+    for i in range(NumberOfRecordings):
+        newRecording = convertToIQ(genSineWaveNoise(SNR,fc, fs, Ns ),fc,fs)
+        result.append(newRecording)
+         
+        
+    
+    result = np.array(result)
+    result = np.swapaxes(result,1,2)
+    return result
+
+
+##############################
+##############################
+# BPSK data file generation
+def genBPSKFile(SNR, fc=75000, fs=2048000, SymbolRate=25000, NumberOfRecordings=100, Ns=500):
+    """
+    Generates a fully formatted matrix of shape(NumberOfRecordings, Ns, 2), 
+    containing NumberOfRecordings of length NS of a noisy BPSK signal with 
+    the specified parameters.
+    """
+    
+    result = []
+
+    for i in range(NumberOfRecordings):
+        newRecording = convertToIQ(genBPSKNoise(SNR,fc, fs, Ns, SymbolRate),fc,fs)
+        result.append(newRecording)
+         
+        
+    result = np.array(result)
+    result = result.reshape((NumberOfRecordings, Ns, 2))
+    return result
+
+
+##############################
+##############################
+# QPSK data file generation
+def genQPSKFile(SNR, fc=75000, fs=2048000, SymbolRate=25000, NumberOfRecordings=100, Ns=500):
+    """
+    Generates a fully formatted matrix of shape(NumberOfRecordings, Ns, 2), 
+    containing NumberOfRecordings of length NS of a noisy QPSK signal with 
+    the specified parameters.
+    """
+    result = []
+
+    for i in range(NumberOfRecordings):
+        newRecording = convertToIQ(genQPSKNoise(SNR,fc, fs, Ns, SymbolRate),fc,fs)
+        result.append(newRecording)
+         
+        
+    result = np.array(result)
+    result = result.reshape((NumberOfRecordings, Ns, 2))
+    return result
+
+
+def genNoiseFile( fc=75000, fs=2048000, NumberOfRecordings=100, Ns=500):
+    """
+    Generates a fully formatted matrix of shape(NumberOfRecordings, Ns, 2), 
+    containing NumberOfRecordings of length NS of 2 channel AWGN with 
+    the specified parameters.
+    """
+    result = np.zeros((NumberOfRecordings,Ns),dtype=complex)
+    index = 0
+    for i in range(NumberOfRecordings):
+        newRecording = convertToIQ(genNoise(Ns=Ns+100),fc,fs)
+
+        # print(newRecording.shape)
+        newRecording = newRecording[0,:] + 1j * newRecording[1,:]
+        # plt.plot(np.real(newRecording))
+        # plt.plot(np.imag(newRecording))
+        # plt.show()
+        # print(newRecording.shape)
+
+        newRecording /= np.max(np.abs(newRecording))
+        # plt.plot(np.real(newRecording))
+        # plt.plot(np.imag(newRecording))
+        # plt.show()
+
+        # print(newRecording.shape)
+
+        result[index,:] = newRecording
+        # plt.plot(np.real(result[index,:]))
+        # plt.plot(np.imag(result[index,:]))
+        # plt.show()
+        
+        index += 1
+         
+        
+    result = np.array(result)
+    print(result.shape)
+    return result
+
+
+##############################
+##############################
 # Iridium Signal simulation
-
-
 def genIridiumSimplex(SNRIn,fc=75000, fs=2048000, RecordingLen=500, printDebug=False, plotDebug=False):
     """
-    Generates a segmented Iridium Signal with the specified parameters, including 
+    Generates a segmented Iridium Simplex Signal with the specified parameters, including 
     carrier frequency fc,
     sampling frequency fs,
     Recording length RecordingLen
     Additionally, includes optional debug options
     """
 
-    
-    bits = 50000                # rate
-    nBits = 1016
+
+    bits = 50000                # Bit rate
+    nBits = 1016                # Total number of bits
     f0 = fc 
 
-
-
-
-    Ns = fs/bits
-    N = int(nBits * fs/bits)              # Total Number of Samples
+    N = int(nBits * fs/bits)    # Total Number of Samples
     if printDebug:
         print(N)
-    padding = int(RecordingLen - (N%RecordingLen))
+    padding = int(RecordingLen - (N%RecordingLen)) # Padding to ensure even splits
     N = N +padding
     if printDebug:
         print("Total samples: ", N)
     offset = rm.randint(0,1000)
-    t = r_[0.0+offset:N+offset]/fs            # time points
+
+    t = r_[0.0+offset:N+offset]/fs      # time points
+
+
     if printDebug:
         print("Total Timesteps: ", len(t))
 
     ############################
     # NOISE BEFORE SIGNAL 
-    
-    preSignalNoiseLen = rm.randint(0, padding)
-    
+    preSignalNoiseLen = rm.randint(0, padding) + 100
     preSignalNoise = np.zeros(preSignalNoiseLen)
-
     if printDebug:
         print("Pre signal noise samples: ", preSignalNoiseLen)
+
 
     ############################
     # PREAMBLE
@@ -601,14 +652,13 @@ def genIridiumSimplex(SNRIn,fc=75000, fs=2048000, RecordingLen=500, printDebug=F
     NPreamble = int(NBitsPreamble * Ns)                          
     preambleEndIndex = preambleStartIndex + NPreamble               
     tPreamble = t[preambleStartIndex:preambleEndIndex]      
+
     if printDebug:
         print("Preamble samples: ", NPreamble)
+
     phase_shift = 2*pi * rm.random()
-    carrier = cos(2*pi*f0*tPreamble + phase_shift) 
-
+    carrier = sin(2*pi*f0*tPreamble + phase_shift) 
     Preamble_Signal = carrier
-    Preamble_Signal = Preamble_Signal/max(abs(Preamble_Signal))
-
 
 
     if plotDebug:
@@ -627,42 +677,43 @@ def genIridiumSimplex(SNRIn,fc=75000, fs=2048000, RecordingLen=500, printDebug=F
     if printDebug:
         print("BPSK samples: ", NBPSK)
     tBPSK = t[BPSKStartIndex:BPSKEndIndex]
-    inputBits = [[0], [0], [1], [1], [1], [1], [1], [1], [1], [1], [0], [0], [0], [0], [0], [0], [1], [1], [0], [0], [0], [0], [1], [1]]
+    carrier = sin(2*pi*f0*tBPSK + phase_shift)
+
+
     inputBits = [[0], [1], [1], [1], [1], [0], [0], [0], [1], [0], [0], [1]]
-    carrier = cos(2*pi*f0*tBPSK + phase_shift)
-
-
     I_bits= np.asarray(inputBits)
 
 
     start = 0
 
-    I_signal = []
+    I_signal = np.zeros((NBPSK,1))
     I_index =  0
     NextSymbolTime = Ns
 
+
     I_bits = I_bits *2 - 1
-    
+
+    # Interpolating Filter
     while start < NBPSK:
-        I_signal.append(I_bits[I_index])
+        I_signal[start] = I_bits[I_index]
         start = start + 1
         if start > NextSymbolTime:
             I_index = I_index + 1
             NextSymbolTime = NextSymbolTime + Ns
-
-
     I_signal = np.array(I_signal).ravel()
-
     if plotDebug:
         plt.plot(I_signal)
         plt.show()
+
     rrc = komm.RootRaisedCosinePulse(0.4, 10)
+    
     symbol_array = np.arange(-10.5 , 10.5, 1/Ns)
     rrc_response = np.empty([len(symbol_array)])
     o = 0
     for i in symbol_array:
         rrc_response[o] = rrc.impulse_response(i)
         o=o + 1
+
     I_signal_pulse = np.convolve(I_signal,rrc_response)
     I_signal_pulse = I_signal_pulse[int(len(rrc_response)/2):len(I_signal_pulse)-int(len(rrc_response)/2)+ (len(rrc_response)+1) % 2]
     if plotDebug:
@@ -711,14 +762,14 @@ def genIridiumSimplex(SNRIn,fc=75000, fs=2048000, RecordingLen=500, printDebug=F
     Q_bits = inputBits[1::2]
 
     start = 0
-    I_signal = []
+    I_signal = np.zeros((NQPSK,1))
     I_index =  0
     NextSymbolTime = Ns
 
     I_bits = I_bits *2 - 1
     
     while start < NQPSK:
-        I_signal.append(I_bits[I_index])
+        I_signal[start] = I_bits[I_index]
         start = start + 1
         if start > NextSymbolTime:
             I_index = I_index + 1
@@ -729,14 +780,14 @@ def genIridiumSimplex(SNRIn,fc=75000, fs=2048000, RecordingLen=500, printDebug=F
 
 
     start = 0
-    Q_signal = []
+    Q_signal = np.zeros((NQPSK,1))
     Q_index =  0
     NextSymbolTime = Ns
 
     Q_bits = Q_bits *2 - 1
     
     while start < NQPSK:
-        Q_signal.append(Q_bits[Q_index])
+        Q_signal[start] = Q_bits[Q_index]
         start = start + 1
         if start > NextSymbolTime:
             Q_index = Q_index + 1
@@ -757,14 +808,10 @@ def genIridiumSimplex(SNRIn,fc=75000, fs=2048000, RecordingLen=500, printDebug=F
 
 
     I_signal_pulse = np.convolve(I_signal, rrc_response)
-    # plt.plot(I_signal_pulse)
     Q_signal_pulse = np.convolve(Q_signal, rrc_response)
-    # plt.plot(Q_signal_pulse)
-    # plt.show()
     
     I_signal_pulse = I_signal_pulse[int(len(rrc_response)/2):len(I_signal_pulse)-int(len(rrc_response)/2)+ (len(rrc_response)+1) % 2]
     Q_signal_pulse = Q_signal_pulse[int(len(rrc_response)/2):len(Q_signal_pulse)-int(len(rrc_response)/2) +(len(rrc_response)+1) % 2]
-    # Mixer
     I_signal_modulated = I_signal_pulse * carrier1
     Q_signal_modulated = Q_signal_pulse * carrier2
 
@@ -808,6 +855,46 @@ def genIridiumSimplex(SNRIn,fc=75000, fs=2048000, RecordingLen=500, printDebug=F
     FinalSignal_TX = np.append(FinalSignal_TX, postSignalNoise)
 
 
+
+    Ts = 1/fs
+    if plotDebug:
+        bitsToShow = 10000
+        timeDomainVisibleLimit = Ts* len(FinalSignal_TX)    
+        fig, axis = plt.subplots(3,1,sharex='col')
+        fig.suptitle('QPSK Modulation', fontsize=12)
+        axis[0].plot(t,np.real(FinalSignal_TX), color='C1')
+        axis[0].set_xlim(0,timeDomainVisibleLimit)
+        axis[0].set_ylabel('Amplitude')
+        axis[0].grid(linestyle='dotted')
+
+        # axis[1].plot(t,np.imag(FinalSignal_TX), color='C2')
+        # axis[1].set_xlim(0,timeDomainVisibleLimit)
+        # axis[1].set_ylabel('Amplitude')
+        # axis[1].grid(linestyle='dotted')
+
+        axis[1].plot(t,np.abs(FinalSignal_TX), color='C3')
+        axis[1].set_xlim(0,timeDomainVisibleLimit)
+        axis[1].set_ylabel('Abs')
+        axis[1].grid(linestyle='dotted')
+
+
+        AngleTemp = np.angle(FinalSignal_TX)
+
+        AngleTemp = (2*np.pi + AngleTemp) * (AngleTemp < 0) + AngleTemp*(AngleTemp > 0)
+        axis[2].plot(t,AngleTemp, color='C4')
+        axis[2].set_xlabel('Time [s]')
+        axis[2].set_xlim(0,timeDomainVisibleLimit)
+        axis[2].set_ylabel('Angle')
+        axis[2].set_ylim(0,2 *np.pi)
+        axis[2].grid(linestyle='dotted')
+
+
+        plt.subplots_adjust(hspace=0.5)
+        plt.show()
+
+    return FinalSignal_TX
+
+
     # plotDebug=True
     if plotDebug:
         plt.plot(FinalSignal_TX)
@@ -825,6 +912,8 @@ def genIridiumSimplex(SNRIn,fc=75000, fs=2048000, RecordingLen=500, printDebug=F
     # plt.show()
     Ts = 1/fs
     t = np.arange(0, Ts *len(FinalSignal_TX), Ts)
+
+    FinalSignal_Noise = np.append(np.random.randn(100),FinalSignal_Noise)
 
     FinalSignal_I_Filtered, FinalSignal_Q_Filtered = convertToIQ(FinalSignal_Noise, f0,fs)
 
@@ -861,8 +950,6 @@ def genIridiumSimplex(SNRIn,fc=75000, fs=2048000, RecordingLen=500, printDebug=F
         axis[3].set_ylabel('Angle')
         axis[3].set_ylim(0,2 *np.pi)
         axis[3].grid(linestyle='dotted')
-
-
 
 
         plt.subplots_adjust(hspace=0.5)
@@ -914,81 +1001,11 @@ def genIridiumSimplex(SNRIn,fc=75000, fs=2048000, RecordingLen=500, printDebug=F
         # print("Full Signal")
         return Result
     
-    
-##############################
-##############################
-# Sine data test file generation
 
-
-def genSineFile(SNR, fc=75000, fs=2048000, NumberOfRecordings=100, Ns=500):
-    """
-    Generates a fully formatted matrix of shape(NumberOfRecordings, Ns, 2), 
-    containing NumberOfRecordings of length NS of a noisy sine wave with 
-    the specified parameters.
-    """
-    
-    result = []
-
-    for i in range(NumberOfRecordings):
-        newRecording = convertToIQ(genSineWaveNoise(SNR,fc, fs, Ns ),fc,fs)
-        result.append(newRecording)
-         
-        
-    
-    result = np.array(result)
-    result = np.swapaxes(result,1,2)
-    return result
-
-
-##############################
-##############################
-# BPSK data file generation
-
-
-def genBPSKFile(SNR, fc=75000, fs=2048000, SymbolRate=25000, NumberOfRecordings=100, Ns=500):
-    """
-    Generates a fully formatted matrix of shape(NumberOfRecordings, Ns, 2), 
-    containing NumberOfRecordings of length NS of a noisy BPSK signal with 
-    the specified parameters.
-    """
-    
-    result = []
-
-    for i in range(NumberOfRecordings):
-        newRecording = convertToIQ(genBPSKNoise(SNR,fc, fs, Ns, SymbolRate),fc,fs)
-        result.append(newRecording)
-         
-        
-    result = np.array(result)
-    result = result.reshape((NumberOfRecordings, Ns, 2))
-    return result
-
-
-##############################
-##############################
-# QPSK data file generation
-
-def genQPSKFile(SNR, fc=75000, fs=2048000, SymbolRate=25000, NumberOfRecordings=100, Ns=500):
-    """
-    Generates a fully formatted matrix of shape(NumberOfRecordings, Ns, 2), 
-    containing NumberOfRecordings of length NS of a noisy QPSK signal with 
-    the specified parameters.
-    """
-    result = []
-
-    for i in range(NumberOfRecordings):
-        newRecording = convertToIQ(genQPSKNoise(SNR,fc, fs, Ns, SymbolRate),fc,fs)
-        result.append(newRecording)
-         
-        
-    result = np.array(result)
-    result = result.reshape((NumberOfRecordings, Ns, 2))
-    return result
 
 ##############################
 ##############################
 # Iridium data file generation
-
 def genIridiumFile(SNR, fc=75000, fs=2048000, NumberOfRecordings=100, Ns=500):
     """
     Generates a fully formatted matrix of shape(NumberOfRecordings, Ns, 2), 
@@ -1030,48 +1047,10 @@ def genIridiumFile(SNR, fc=75000, fs=2048000, NumberOfRecordings=100, Ns=500):
     
 
 
-def genNoiseFile( fc=75000, fs=2048000, NumberOfRecordings=100, Ns=500):
-    """
-    Generates a fully formatted matrix of shape(NumberOfRecordings, Ns, 2), 
-    containing NumberOfRecordings of length NS of 2 channel AWGN with 
-    the specified parameters.
-    """
-    result = np.zeros((NumberOfRecordings,Ns),dtype=complex)
-    index = 0
-    for i in range(NumberOfRecordings):
-        newRecording = convertToIQ(genNoise(Ns=Ns+100),fc,fs)
-
-        # print(newRecording.shape)
-        newRecording = newRecording[0,:] + 1j * newRecording[1,:]
-        # plt.plot(np.real(newRecording))
-        # plt.plot(np.imag(newRecording))
-        # plt.show()
-        # print(newRecording.shape)
-
-        newRecording /= np.max(np.abs(newRecording))
-        # plt.plot(np.real(newRecording))
-        # plt.plot(np.imag(newRecording))
-        # plt.show()
-
-        # print(newRecording.shape)
-
-        result[index,:] = newRecording
-        # plt.plot(np.real(result[index,:]))
-        # plt.plot(np.imag(result[index,:]))
-        # plt.show()
-        
-        index += 1
-         
-        
-    result = np.array(result)
-    print(result.shape)
-    return result
-
 
 ##############################
 ##############################
 # Matched Filter Support
-
 
 def genMatchedFilter(filterLength=500, fc=75000, fs=2048000, printDebug=False, plotDebug=False):    
     """
@@ -1203,8 +1182,41 @@ def genMatchedFilter(filterLength=500, fc=75000, fs=2048000, printDebug=False, p
     print(Signal.shape)
     return Signal
 
+def matchedFilterIridium(SNR, NumberofRecordings,commonThresh = 420):
+    DataSet = genIridiumFile(SNR, NumberOfRecordings=NumberofRecordings, Ns = 42000)
+    matchedFilter = genMatchedFilter()
+    # print(matchedFilter.shape)
+    ComplexMF = matchedFilter[0,:] + 1j * matchedFilter[0,:]
+    threshold = commonThresh
+    detections = 0
+    for signal in DataSet:
+        Complex = signal[:,0] + 1j * signal[:,1]
+        Filtered = np.convolve(ComplexMF, Complex)
+        absoluteValFiltered= np.abs(Filtered)
+        # plt.plot(absoluteValFiltered)
+        if any(absoluteValFiltered > threshold):
+            detections = detections + 1
+            
+def matchedFilterNoise(NumberofRecordings,commonThresh = 420):
+    DataSet = genNoiseFile(NumberOfRecordings=NumberofRecordings, Ns = 42000)
+    matchedFilter = genMatchedFilter()
+    # print(matchedFilter.shape)
+    ComplexMF = matchedFilter[0,:] + 1j * matchedFilter[0,:]
+    threshold = commonThresh
+    detections = 0
+    for signal in DataSet:
+        Complex = signal[:,0] + 1j * signal[:,1]
+        Filtered = np.convolve(ComplexMF, Complex)
+        absoluteValFiltered= np.abs(Filtered)
+        # plt.plot(absoluteValFiltered)
+        if any(absoluteValFiltered > threshold):
+            detections = detections + 1
 
 
+    
+    # plt.show()
+
+    return (detections / NumberofRecordings)
 
 
 def genSineWavePaired(SNR, fc=75000, fs=2048000, Ns = 500):
@@ -1223,8 +1235,6 @@ def genSineWavePaired(SNR, fc=75000, fs=2048000, Ns = 500):
 
     return waveOriginal, waveNoisy
     
-
-
 def genPairedSineWaveFile():
 
     
@@ -1264,7 +1274,6 @@ def genSineWaveParams(fc,Ns, fs=2048000, A = 1.0, phase =0.0, plotDebug=False):
 
     return carrier
 
-
 def genPairedSineWaveParamsFile(SamplesPerBin=100, SNRs = np.arange(-5,15)):
 
 
@@ -1285,15 +1294,17 @@ def genPairedSineWaveParamsFile(SamplesPerBin=100, SNRs = np.arange(-5,15)):
             
             SignalPower = NoisePower * SNRLin
 
-            fc = np.random.rand() * 2000 + 74000
+            fc = np.random.rand() * 100000
             A = np.sqrt(SignalPower/2)
             phase = np.random.rand() * 2 * np.pi - np.pi
-            waveOG = genSineWaveParams(fc = fc, Ns = 500, A = A, phase = phase,plotDebug=False)
+
+            A = A * np.exp(1j * phase)
+            waveOG = genSineWaveParams(fc = fc, Ns = 500, A = A,plotDebug=False)
             SignalPower = np.sum(np.power(np.abs(waveOG),2)) / Ns
 
-            print("Signal Power:",SignalPower)
-            print("Noise Power:",NoisePower)
-            Params[index] = [fc,A,phase]
+            # print("Signal Power:",SignalPower)
+            # print("Noise Power:",NoisePower)
+            Params[index] = [fc,np.real(A),np.imag(A)]
             waveNoisy = waveOG + noise
             Noisy[index] = waveNoisy
             index = index + 1
@@ -1302,4 +1313,4 @@ def genPairedSineWaveParamsFile(SamplesPerBin=100, SNRs = np.arange(-5,15)):
     np.save("Params.npy", Params)
 
 
-genPairedSineWaveParamsFile(SamplesPerBin=1000, SNRs = np.arange(-5,20))
+# genPairedSineWaveParamsFile(SamplesPerBin=1000, SNRs = np.arange(-5,20))
